@@ -31,7 +31,7 @@ However, in order to further extend the project’s capabilities, my goal is to 
 
 The main challenge is therefore to ensure perfect synchronization with the actual VFD protocol, eliminating any ambiguity at the lowest decoding level.
 
-## Files
+### Files
 
 You need to put the yaml file and the components folder into the esphome folder of your Home Assistant setup.
 
