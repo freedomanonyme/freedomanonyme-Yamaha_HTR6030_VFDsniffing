@@ -31,6 +31,10 @@ However, in order to further extend the project’s capabilities, my goal is to 
 
 The main challenge is therefore to ensure perfect synchronization with the actual VFD protocol, eliminating any ambiguity at the lowest decoding level.
 
+## Files
+
+You need to put the yaml file and the components folder into the esphome folder of your Home Assistant setup.
+
 ## Hardware Setup & Pinout
 
 I used an **ESP32 DevKit V1**. To protect the circuits, I added resistors to the data lines.  
