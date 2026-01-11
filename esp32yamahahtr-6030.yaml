@@ -1,0 +1,261 @@
+esphome:
+  name: yamaha-volume-decoder
+  friendly_name: "Yamaha Volume Decoder"
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: "INSERT YOUR API KEY BETWEEN THE QUOTATION MARKS"
+
+ota:
+  platform: esphome
+  password: "INSERT OTA PASSWORD BETWEEN THE QUOTATION MARKS"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+  fast_connect: True
+
+# Globals pour sauvegarder les valeurs
+globals:
+  - id: saved_volume
+    type: std::string
+    restore_value: yes
+    initial_value: '""'
+  - id: saved_source
+    type: std::string
+    restore_value: yes
+    initial_value: '""'
+  - id: saved_mute
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
+text_sensor:
+  - platform: template
+    name: "Yamaha Volume"
+    id: yamaha_volume_sensor
+    lambda: |-
+      if (id(saved_volume) != "") {
+        return id(saved_volume);
+      }
+      return {"Unknown"};
+    on_value:
+      then:
+        - globals.set:
+            id: saved_volume
+            value: !lambda 'return x;'
+  
+  - platform: template
+    name: "Yamaha Source"
+    id: yamaha_source_sensor
+    lambda: |-
+      if (id(saved_source) != "") {
+        return id(saved_source);
+      }
+      return {"Unknown"};
+    on_value:
+      then:
+        - globals.set:
+            id: saved_source
+            value: !lambda 'return x;'
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO34
+      mode: INPUT
+    name: "Yamaha Power State"
+    id: yamaha_power_state
+    device_class: power
+    filters:
+      - delayed_on: 100ms
+      - delayed_off: 100ms
+  
+  - platform: template
+    name: "Yamaha Mute"
+    id: yamaha_mute_sensor
+    icon: "mdi:volume-mute"
+    lambda: |-
+      return id(saved_mute);
+    on_state:
+      then:
+        - globals.set:
+            id: saved_mute
+            value: !lambda 'return x;'
+
+switch:
+  - platform: template
+    name: "Yamaha Power"
+    id: yamaha_power_switch
+    icon: "mdi:power"
+    lambda: |-
+      // L'état de la switch reflète l'état de l'ampli
+      return id(yamaha_power_state).state;
+    turn_on_action:
+      - button.press: power_on_button
+    turn_off_action:
+      - button.press: power_off_button
+
+remote_transmitter:
+  pin: GPIO4
+  carrier_duty_percent: 50% # Requis pour la LED optique
+  non_blocking: true
+
+button:
+
+  - platform: template
+    name: "Power OFF"
+    id: power_off_button
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x817E
+          command: 0x807F
+
+  - platform: template
+    name: "Power ON"
+    id: power_on_button
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x817E
+          command: 0x817E
+
+  - platform: template
+    name: "MUTE"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xE31C
+
+  - platform: template
+    name: "Volume UP"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xE51A
+
+  - platform: template
+    name: "Volume DOWN"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xE41B
+
+  - platform: template
+    name: "Entrée CD"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xEA15
+
+  - platform: template
+    name: "Entrée DTV/CBL"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xAB54
+
+  - platform: template
+    name: "Entrée DVD"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x3EC1
+
+  - platform: template
+    name: "Entrée DVR"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xEC13
+
+  - platform: template
+    name: "Entrée MD/CDR"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x36C9
+
+  - platform: template
+    name: "Entrée V-AUX"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0xAA55
+
+
+  - platform: template
+    name: "Menu"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x7B84
+
+  - platform: template
+    name: "Enter"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x21DE
+
+  - platform: template
+    name: "Left"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x609F
+
+  - platform: template
+    name: "Right"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x619E
+
+  - platform: template
+    name: "Up"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x629D
+
+  - platform: template
+    name: "Down"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x639C
+
+  - platform: template
+    name: "Return"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x857A
+          command: 0x55AA
+
+yamaha_vfd:
+  id: vfd_comp
+  ckfd_pin:
+    number: 18
+  dtfd_pin:
+    number: 23
+  cefd_pin:
+    number: 27
+  source_sensor: yamaha_source_sensor
+  volume_sensor: yamaha_volume_sensor
+  mute_sensor: yamaha_mute_sensor
+  power_sensor: yamaha_power_state
+
