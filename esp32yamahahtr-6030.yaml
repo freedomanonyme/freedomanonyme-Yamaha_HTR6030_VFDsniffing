@@ -35,6 +35,14 @@ globals:
     type: std::string
     restore_value: yes
     initial_value: '""'
+  - id: last_volume_update_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: volume_refresh_sent
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   - id: saved_source
     type: std::string
     restore_value: yes
@@ -42,6 +50,10 @@ globals:
   - id: saved_mute
     type: bool
     restore_value: yes
+    initial_value: 'false'
+  - id: suppress_source_ir
+    type: bool
+    restore_value: no
     initial_value: 'false'
 
 text_sensor:
@@ -55,9 +67,19 @@ text_sensor:
       return {"Unknown"};
     on_value:
       then:
-        - globals.set:
-            id: saved_volume
-            value: !lambda 'return x;'
+        - if:
+            condition:
+              lambda: 'return x != id(saved_volume);'
+            then:
+              - globals.set:
+                  id: saved_volume
+                  value: !lambda 'return x;'
+              - globals.set:
+                  id: last_volume_update_ms
+                  value: !lambda 'return millis();'
+              - globals.set:
+                  id: volume_refresh_sent
+                  value: 'false'
   
   - platform: template
     name: "Yamaha Source"
@@ -72,6 +94,9 @@ text_sensor:
         - globals.set:
             id: saved_source
             value: !lambda 'return x;'
+        - globals.set:
+            id: suppress_source_ir
+            value: 'true'
         - if:
             condition:
               lambda: 'return x == "INPUT DVD";'
@@ -114,6 +139,9 @@ text_sensor:
               - select.set:
                   id: yamaha_source_select
                   option: "INPUT DVR"
+        - globals.set:
+            id: suppress_source_ir
+            value: 'false'
 
 select:
   - platform: template
@@ -131,34 +159,40 @@ select:
       then:
         - if:
             condition:
-              lambda: 'return x == "INPUT DVD";'
+              lambda: 'return id(suppress_source_ir);'
             then:
-              - button.press: entree_dvd_button
-        - if:
-            condition:
-              lambda: 'return x == "INPUT CD";'
-            then:
-              - button.press: entree_cd_button
-        - if:
-            condition:
-              lambda: 'return x == "INPUT DTV/CBL";'
-            then:
-              - button.press: entree_dtv_cbl_button
-        - if:
-            condition:
-              lambda: 'return x == "INPUT V-AUX";'
-            then:
-              - button.press: entree_vaux_button
-        - if:
-            condition:
-              lambda: 'return x == "INPUT DVR";'
-            then:
-              - button.press: entree_dvr_button
-        - if:
-            condition:
-              lambda: 'return x == "INPUT MD/CDR";'
-            then:
-              - button.press: entree_md_cdr_button
+              - lambda: 'return;'
+            else:
+              - if:
+                  condition:
+                    lambda: 'return x == "INPUT DVD";'
+                  then:
+                    - button.press: entree_dvd_button
+              - if:
+                  condition:
+                    lambda: 'return x == "INPUT CD";'
+                  then:
+                    - button.press: entree_cd_button
+              - if:
+                  condition:
+                    lambda: 'return x == "INPUT DTV/CBL";'
+                  then:
+                    - button.press: entree_dtv_cbl_button
+              - if:
+                  condition:
+                    lambda: 'return x == "INPUT V-AUX";'
+                  then:
+                    - button.press: entree_vaux_button
+              - if:
+                  condition:
+                    lambda: 'return x == "INPUT DVR";'
+                  then:
+                    - button.press: entree_dvr_button
+              - if:
+                  condition:
+                    lambda: 'return x == "INPUT MD/CDR";'
+                  then:
+                    - button.press: entree_md_cdr_button
 
 
 binary_sensor:
@@ -203,6 +237,21 @@ remote_transmitter:
   carrier_duty_percent: 50% # Requis pour la LED optique
   non_blocking: true
 
+interval:
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (id(volume_refresh_sent)) return false;
+              if (id(last_volume_update_ms) == 0) return false;
+              return (millis() - id(last_volume_update_ms)) > 3100;
+          then:
+            - button.press: volume_up_button
+            - globals.set:
+                id: volume_refresh_sent
+                value: 'true'
+
 button:
 
   - platform: factory_reset
@@ -233,6 +282,7 @@ button:
 
   - platform: template
     name: "Volume UP"
+    id: volume_up_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
@@ -354,4 +404,3 @@ yamaha_vfd:
   volume_sensor: yamaha_volume_sensor
   mute_sensor: yamaha_mute_sensor
   power_sensor: yamaha_power_state
-

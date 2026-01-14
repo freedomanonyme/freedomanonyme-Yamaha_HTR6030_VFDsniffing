@@ -125,6 +125,38 @@ void YamahaVFD::loop() {
     }
     this->last_amp_state_ = amp_on;
   }
+
+  if (this->has_pending_vol_ &&
+      ((now - this->pending_vol_ms_ >= VOL_PUBLISH_DELAY_MS) ||
+       (now - this->last_vol_publish_ms_ >= VOL_MAX_HOLD_MS))) {
+    if (this->volume_sensor_) this->volume_sensor_->publish_state(this->pending_vol_str_);
+    this->last_published_vol_ = this->pending_vol_str_;
+    this->last_vol_publish_ms_ = now;
+
+    this->has_last_good_vol_ = true;
+    this->last_good_vol_db_ = this->pending_vol_db_;
+    this->last_good_vol_ms_ = now;
+
+    if (this->pending_patched_sign_ || this->pending_patched_digit_) {
+      ESP_LOGD(TAG, "Volume patched%s%s -> %s",
+               this->pending_patched_sign_ ? " sign" : "",
+               this->pending_patched_digit_ ? " digit" : "",
+               this->pending_vol_str_.c_str());
+    }
+
+    if (this->pending_vol_db_ <= -80.0f) {
+      if (!this->last_published_mute_) {
+        if (this->mute_sensor_) this->mute_sensor_->publish_state(true);
+        this->last_published_mute_ = true;
+      }
+    } else if (this->last_published_mute_) {
+      ESP_LOGD(TAG, "Unmute auto par action volume (%s)", this->pending_vol_str_.c_str());
+      if (this->mute_sensor_) this->mute_sensor_->publish_state(false);
+      this->last_published_mute_ = false;
+    }
+
+    this->has_pending_vol_ = false;
+  }
 }
 
 void YamahaVFD::process_frame_() {
@@ -172,22 +204,51 @@ void YamahaVFD::process_frame_() {
     return delta;
   };
 
-  auto parse_volume_tolerant = [&](float &out_db, bool &patched_sign, bool &patched_digit) -> bool {
+  auto parse_volume_tolerant = [&](float &out_db, bool &patched_sign, bool &patched_digit,
+                                   bool &weak_anchor) -> bool {
     patched_sign = false;
     patched_digit = false;
+    weak_anchor = false;
 
     // IMPORTANT: utiliser lossy (pas content) pour ne pas "perdre" des digits non-printables
     const std::string &s = lossy;
 
-    // Ancre: "dB" si possible, sinon dernier 'd' proche de la fin
-    size_t anchor = s.rfind("dB");
-    if (anchor == std::string::npos) {
-      anchor = s.rfind('d');
-      if (anchor == std::string::npos) return false;
-      if (s.size() - anchor > 16) return false;
+    // Ancre forte: on préfère un "dB" qui a "UME" proche avant (tolère V/O/L corrompus).
+    size_t anchor = std::string::npos;
+    size_t db_pos = s.rfind("dB");
+    while (db_pos != std::string::npos) {
+      size_t ume_pos = s.rfind("UME", db_pos);
+      if (ume_pos != std::string::npos && db_pos > ume_pos && (db_pos - ume_pos) <= 32) {
+        anchor = db_pos;
+        break;
+      }
+      if (db_pos == 0) break;
+      db_pos = s.rfind("dB", db_pos - 1);
     }
 
-    int i = static_cast<int>(anchor) - 1;
+    int i = -1;
+    if (anchor != std::string::npos) {
+      i = static_cast<int>(anchor) - 1;
+      weak_anchor = false;
+    } else {
+      // Fallback numérique strict: derniers digits avec signe proche.
+      for (int j = static_cast<int>(s.size()) - 1; j >= 0; j--) {
+        if ((s[j] >= '0' && s[j] <= '9') || s[j] == '?') {
+          bool has_sign = false;
+          for (int k = j - 1; k >= 0 && k >= j - 4; k--) {
+            if (s[k] == '-' || s[k] == '+') {
+              has_sign = true;
+              break;
+            }
+          }
+          if (!has_sign) continue;
+          i = j;
+          break;
+        }
+      }
+      weak_anchor = true;
+    }
+    if (i < 0) return false;
     while (i >= 0 && s[i] == ' ') i--;
     if (i < 0) return false;
 
@@ -233,7 +294,7 @@ void YamahaVFD::process_frame_() {
         if (!clamp_in_range(v)) return;
 
         int score = 0;
-        if (this->has_last_good_vol_) {
+        if (this->has_last_good_vol_ && pd) {
           const int last = round_to_int(this->last_good_vol_db_);
           const uint32_t dt = millis() - this->last_good_vol_ms_;
           const int md = max_delta_for_ms(dt);
@@ -303,8 +364,9 @@ void YamahaVFD::process_frame_() {
   float vol_db = 0.0f;
   bool patched_sign = false;
   bool patched_digit = false;
+  bool weak_anchor = false;
 
-  if (parse_volume_tolerant(vol_db, patched_sign, patched_digit)) {
+  if (parse_volume_tolerant(vol_db, patched_sign, patched_digit, weak_anchor)) {
     // Publication (inchangé dans l’esprit)
     // Format: "<int> dB" (comme avant)
     const int vol_i = static_cast<int>(vol_db);  // car Yamaha: pas de décimales, step 1 dB
@@ -322,32 +384,13 @@ void YamahaVFD::process_frame_() {
       }
     }
 
-    if (this->volume_sensor_) this->volume_sensor_->publish_state(final_v);
-    this->last_published_vol_ = final_v;
-
-    // Historique "fiable" mis à jour
-    this->has_last_good_vol_ = true;
-    this->last_good_vol_db_ = vol_db;
-    this->last_good_vol_ms_ = millis();
-
-    if (patched_sign || patched_digit) {
-      ESP_LOGD(TAG, "Volume patched%s%s -> %s",
-               patched_sign ? " sign" : "",
-               patched_digit ? " digit" : "",
-               final_v.c_str());
-    }
-
-    // Règles mute/unmute (inchangées)
-    if (vol_db <= -80.0f) {
-      if (!this->last_published_mute_) {
-        if (this->mute_sensor_) this->mute_sensor_->publish_state(true);
-        this->last_published_mute_ = true;
-      }
-    } else if (this->last_published_mute_) {
-      ESP_LOGD(TAG, "Unmute auto par action volume (%s)", final_v.c_str());
-      if (this->mute_sensor_) this->mute_sensor_->publish_state(false);
-      this->last_published_mute_ = false;
-    }
+    // Publication différée: on garde la dernière valeur vue dans la rafale
+    this->pending_vol_db_ = vol_db;
+    this->pending_vol_str_ = final_v;
+    this->pending_patched_sign_ = patched_sign;
+    this->pending_patched_digit_ = patched_digit;
+    this->pending_vol_ms_ = millis();
+    this->has_pending_vol_ = true;
   }
 
   // 3) MUTE ON/OFF (comme avant, basé sur content)
@@ -366,11 +409,17 @@ void YamahaVFD::process_frame_() {
    // 4. DÉCODAGE DES SOURCES
   std::string s = "";
   if (content.find("DVD") != std::string::npos) s = "INPUT DVD";
-  else if (content.find("CD") != std::string::npos) s = "INPUT CD";
-  else if (content.find("DTV") != std::string::npos || content.find("CBL") != std::string::npos) s = "INPUT DTV/CBL";
-  else if (content.find("V-AUX") != std::string::npos) s = "INPUT V-AUX";
-  else if (content.find("MD") != std::string::npos || content.find("CDR") != std::string::npos) s = "INPUT MD/CDR";
-  else if (content.find("DVR") != std::string::npos) s = "INPUT DVR";
+  else if (content.find("MD") != std::string::npos || content.find("CD-R") != std::string::npos || content.find("CDR") != std::string::npos) {
+    s = "INPUT MD/CDR";
+  } else if (content.find("DTV") != std::string::npos || content.find("CBL") != std::string::npos) {
+    s = "INPUT DTV/CBL";
+  } else if (content.find("V-AUX") != std::string::npos) {
+    s = "INPUT V-AUX";
+  } else if (content.find("DVR") != std::string::npos) {
+    s = "INPUT DVR";
+  } else if (content.find("CD") != std::string::npos) {
+    s = "INPUT CD";
+  }
   if (!s.empty() && s != this->last_published_source_) {
     if (this->source_sensor_) this->source_sensor_->publish_state(s);
     this->last_published_source_ = s;

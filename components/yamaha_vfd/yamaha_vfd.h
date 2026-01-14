@@ -33,6 +33,8 @@ class YamahaVFD : public Component {
   static constexpr uint16_t BUFFER_SIZE = 1024;
   static constexpr uint32_t GAP_MS = 50;
   static constexpr uint32_t CK_TIMEOUT = 50000;
+  static constexpr uint32_t VOL_PUBLISH_DELAY_MS = 120;
+  static constexpr uint32_t VOL_MAX_HOLD_MS = 250;
 
   // Plage volume Yamaha (validée)
   static constexpr int VOL_MIN_DB = -80;
@@ -68,6 +70,16 @@ class YamahaVFD : public Component {
   bool has_last_good_vol_{false};
   float last_good_vol_db_{0.0f};
   uint32_t last_good_vol_ms_{0};
+
+  // Publication différée du volume (pour rafales rapides)
+  bool has_pending_vol_{false};
+  float pending_vol_db_{0.0f};
+  std::string pending_vol_str_{};
+  bool pending_patched_sign_{false};
+  bool pending_patched_digit_{false};
+  uint32_t pending_vol_ms_{0};
+
+  uint32_t last_vol_publish_ms_{0};
 };
 
 }  // namespace yamaha_vfd
