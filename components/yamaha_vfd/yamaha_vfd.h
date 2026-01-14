@@ -32,7 +32,7 @@ class YamahaVFD : public Component {
   // Inchangé (ménage + constantes)
   static constexpr uint16_t BUFFER_SIZE = 1024;
   static constexpr uint32_t GAP_MS = 50;
-  static constexpr uint32_t CK_TIMEOUT = 6000;
+  static constexpr uint32_t CK_TIMEOUT = 50000;
 
   // Plage volume Yamaha (validée)
   static constexpr int VOL_MIN_DB = -80;
@@ -56,6 +56,7 @@ class YamahaVFD : public Component {
   volatile uint16_t buffer_index_{0};
   volatile uint32_t last_byte_time_{0};
   volatile bool has_data_{false};
+  volatile bool synchronized_{false};
 
   // État capteurs
   std::string last_published_vol_{};

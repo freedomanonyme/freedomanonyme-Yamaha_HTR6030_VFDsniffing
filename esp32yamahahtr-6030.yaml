@@ -72,6 +72,94 @@ text_sensor:
         - globals.set:
             id: saved_source
             value: !lambda 'return x;'
+        - if:
+            condition:
+              lambda: 'return x == "INPUT DVD";'
+            then:
+              - select.set:
+                  id: yamaha_source_select
+                  option: "INPUT DVD"
+        - if:
+            condition:
+              lambda: 'return x == "INPUT CD";'
+            then:
+              - select.set:
+                  id: yamaha_source_select
+                  option: "INPUT CD"
+        - if:
+            condition:
+              lambda: 'return x == "INPUT DTV/CBL";'
+            then:
+              - select.set:
+                  id: yamaha_source_select
+                  option: "INPUT DTV/CBL"
+        - if:
+            condition:
+              lambda: 'return x == "INPUT V-AUX";'
+            then:
+              - select.set:
+                  id: yamaha_source_select
+                  option: "INPUT V-AUX"
+        - if:
+            condition:
+              lambda: 'return x == "INPUT MD/CDR";'
+            then:
+              - select.set:
+                  id: yamaha_source_select
+                  option: "INPUT MD/CDR"
+        - if:
+            condition:
+              lambda: 'return x == "INPUT DVR";'
+            then:
+              - select.set:
+                  id: yamaha_source_select
+                  option: "INPUT DVR"
+
+select:
+  - platform: template
+    name: "Yamaha Source Select"
+    id: yamaha_source_select
+    optimistic: true
+    options:
+      - "INPUT DVD"
+      - "INPUT CD"
+      - "INPUT DTV/CBL"
+      - "INPUT V-AUX"
+      - "INPUT MD/CDR"
+      - "INPUT DVR"
+    set_action:
+      then:
+        - if:
+            condition:
+              lambda: 'return x == "INPUT DVD";'
+            then:
+              - button.press: entree_dvd_button
+        - if:
+            condition:
+              lambda: 'return x == "INPUT CD";'
+            then:
+              - button.press: entree_cd_button
+        - if:
+            condition:
+              lambda: 'return x == "INPUT DTV/CBL";'
+            then:
+              - button.press: entree_dtv_cbl_button
+        - if:
+            condition:
+              lambda: 'return x == "INPUT V-AUX";'
+            then:
+              - button.press: entree_vaux_button
+        - if:
+            condition:
+              lambda: 'return x == "INPUT DVR";'
+            then:
+              - button.press: entree_dvr_button
+        - if:
+            condition:
+              lambda: 'return x == "INPUT MD/CDR";'
+            then:
+              - button.press: entree_md_cdr_button
+
 
 binary_sensor:
   - platform: gpio
@@ -117,6 +205,9 @@ remote_transmitter:
 
 button:
 
+  - platform: factory_reset
+    name: "Factory reset (NVS)"
+
   - platform: template
     name: "Power OFF"
     id: power_off_button
@@ -156,6 +247,7 @@ button:
 
   - platform: template
     name: "Entrée CD"
+    id: entree_cd_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
@@ -163,6 +255,7 @@ button:
 
   - platform: template
     name: "Entrée DTV/CBL"
+    id: entree_dtv_cbl_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
@@ -170,6 +263,7 @@ button:
 
   - platform: template
     name: "Entrée DVD"
+    id: entree_dvd_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
@@ -177,6 +271,7 @@ button:
 
   - platform: template
     name: "Entrée DVR"
+    id: entree_dvr_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
@@ -184,6 +279,7 @@ button:
 
   - platform: template
     name: "Entrée MD/CDR"
+    id: entree_md_cdr_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
@@ -191,11 +287,11 @@ button:
 
   - platform: template
     name: "Entrée V-AUX"
+    id: entree_vaux_button
     on_press:
       - remote_transmitter.transmit_nec:
           address: 0x857A
           command: 0xAA55
-
 
   - platform: template
     name: "Menu"
