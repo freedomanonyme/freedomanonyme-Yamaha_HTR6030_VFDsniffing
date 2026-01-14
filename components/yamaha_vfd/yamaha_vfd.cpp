@@ -1,6 +1,10 @@
 #include "yamaha_vfd.h"
-#include "soc/gpio_struct.h"
+
+#include <cctype>
+#include <cstdlib>
+
 #include "esphome/core/log.h"
+#include "soc/gpio_struct.h"
 
 namespace esphome {
 namespace yamaha_vfd {
@@ -8,59 +12,67 @@ namespace yamaha_vfd {
 static const char *const TAG = "yamaha_vfd";
 
 static inline void IRAM_ATTR fixed_nop_delay() {
-    __asm__ __volatile__ ("nop; nop");
+  __asm__ __volatile__("nop; nop");
 }
 
 void YamahaVFD::setup() {
   this->ckfd_pin_->setup();
   this->dtfd_pin_->setup();
   this->cefd_pin_->setup();
-  this->ck_mask_ = (1 << this->ckfd_pin_->get_pin());
-  this->dt_mask_ = (1 << this->dtfd_pin_->get_pin());
+
+  const uint8_t ck_pin = this->ckfd_pin_->get_pin();
+  const uint8_t dt_pin = this->dtfd_pin_->get_pin();
+  this->ck_mask_ = (1UL << ck_pin);
+  this->dt_mask_ = (1UL << dt_pin);
+
   this->cefd_pin_->attach_interrupt(YamahaVFD::handle_ce_interrupt, this, gpio::INTERRUPT_FALLING_EDGE);
 }
 
 void IRAM_ATTR YamahaVFD::handle_ce_interrupt(YamahaVFD *parent) {
   uint8_t b = 0;
-  uint32_t now = millis();
+  const uint32_t now = millis();
 
-  // 1. Lecture de l'octet (Strobe par front descendant)
   for (int i = 0; i < 8; i++) {
-    uint32_t timeout = 6000;
-    while (!(GPIO.in & parent->ck_mask_) && --timeout);
-    timeout = 6000;
-    while ((GPIO.in & parent->ck_mask_) && --timeout);
+    uint32_t timeout = CK_TIMEOUT;
+    while (!(GPIO.in & parent->ck_mask_) && --timeout) {
+      // wait CK high
+    }
+
+    timeout = CK_TIMEOUT;
+    while ((GPIO.in & parent->ck_mask_) && --timeout) {
+      // wait CK low
+    }
+
     fixed_nop_delay();
-    if (GPIO.in & parent->dt_mask_) b |= (1 << (7 - i));
+    if (GPIO.in & parent->dt_mask_) {
+      b |= (1U << (7 - i));
+    }
   }
 
-  // 2. Logique de Gap : si silence > 50ms, nouvelle trame
-  if (now - parent->last_byte_time_ > 50) {
+  if (now - parent->last_byte_time_ > GAP_MS) {
     parent->buffer_index_ = 0;
   }
 
-  if (parent->buffer_index_ < 1024) {
+  if (parent->buffer_index_ < BUFFER_SIZE) {
     parent->buffer_[parent->buffer_index_++] = b;
     parent->last_byte_time_ = now;
-    parent->has_data_ = true; // Indique à la loop qu'une capture est en cours
+    parent->has_data_ = true;
   }
 }
 
 void YamahaVFD::loop() {
-  uint32_t now = millis();
+  const uint32_t now = millis();
 
-  // Si silence > 50ms après le dernier octet reçu, on traite la trame
-  if (this->has_data_ && (now - this->last_byte_time_ > 50)) {
+  if (this->has_data_ && (now - this->last_byte_time_ > GAP_MS)) {
     if (this->buffer_index_ > 0) {
-        this->process_frame_();
+      this->process_frame_();
     }
     this->buffer_index_ = 0;
     this->has_data_ = false;
   }
 
-  // Règle Power OFF transition (vfd-4)
   if (this->power_sensor_ != nullptr) {
-    bool amp_on = this->power_sensor_->state;
+    const bool amp_on = this->power_sensor_->state;
     if (this->last_amp_state_ && !amp_on) {
       if (this->last_published_mute_) {
         if (this->mute_sensor_) this->mute_sensor_->publish_state(false);
@@ -72,54 +84,217 @@ void YamahaVFD::loop() {
 }
 
 void YamahaVFD::process_frame_() {
-  // 1. Log Hexadécimal complet et ASCII
-  std::string hex_str = "";
-  std::string content = "";
+  // 1) Log HEX + construire 2 vues ASCII:
+  // - content : seulement imprimables (pour sources/mute comme avant)
+  // - lossy   : même longueur que buffer, non-imprimables remplacés par '?'
+  std::string hex_str;
+  std::string content;
+  std::string lossy;
+
+  hex_str.reserve(static_cast<size_t>(this->buffer_index_) * 3);
+  content.reserve(static_cast<size_t>(this->buffer_index_));
+  lossy.reserve(static_cast<size_t>(this->buffer_index_));
+
   for (uint16_t i = 0; i < this->buffer_index_; i++) {
     char buf[4];
-    sprintf(buf, "%02X ", this->buffer_[i]);
+    snprintf(buf, sizeof(buf), "%02X ", this->buffer_[i]);
     hex_str += buf;
-    if (this->buffer_[i] >= 0x20 && this->buffer_[i] <= 0x7E) content += (char)this->buffer_[i];
-  }
-  ESP_LOGI(TAG, "Trame (%d octets): %s", this->buffer_index_, hex_str.c_str());
 
+    const uint8_t c = this->buffer_[i];
+    if (c >= 0x20 && c <= 0x7E) {
+      const char ch = static_cast<char>(c);
+      content += ch;
+      lossy += ch;
+    } else {
+      lossy += '?';
+    }
+  }
+
+  ESP_LOGI(TAG, "Trame (%d octets): %s", this->buffer_index_, hex_str.c_str());
   if (content.empty()) return;
 
-  // 2. DÉCODAGE VOLUME & RÈGLE UNMUTE SUR ACTION
-  size_t db_pos = content.rfind("dB");
-  if (db_pos != std::string::npos) {
-    std::string vol_str = "";
-    for (int i = 1; i <= 8; i++) {
-      int pos = (int)db_pos - i;
-      if (pos < 0) break;
-      if (isdigit(content[pos]) || content[pos] == '-' || content[pos] == '.') vol_str = content[pos] + vol_str;
-      else if (!vol_str.empty()) break;
+  // Helpers volume
+  auto clamp_in_range = [&](int v) -> bool { return v >= VOL_MIN_DB && v <= VOL_MAX_DB; };
+
+  auto round_to_int = [](float x) -> int {
+    return static_cast<int>(x + (x >= 0 ? 0.5f : -0.5f));
+  };
+
+  auto max_delta_for_ms = [](uint32_t dt_ms) -> int {
+    // Non-bloquant: plus le temps depuis la dernière valeur fiable est long, plus on autorise un saut.
+    // 80ms est un bon compromis empirique; cap à 12 dB.
+    int delta = 1 + static_cast<int>(dt_ms / 80);
+    if (delta > 12) delta = 12;
+    return delta;
+  };
+
+  auto parse_volume_tolerant = [&](float &out_db, bool &patched_sign, bool &patched_digit) -> bool {
+    patched_sign = false;
+    patched_digit = false;
+
+    // IMPORTANT: utiliser lossy (pas content) pour ne pas "perdre" des digits non-printables
+    const std::string &s = lossy;
+
+    // Ancre: "dB" si possible, sinon dernier 'd' proche de la fin
+    size_t anchor = s.rfind("dB");
+    if (anchor == std::string::npos) {
+      anchor = s.rfind('d');
+      if (anchor == std::string::npos) return false;
+      if (s.size() - anchor > 16) return false;
     }
 
-    if (!vol_str.empty()) {
-      float vol_val = atof(vol_str.c_str());
-      std::string final_v = vol_str + " dB";
-      
-      if (this->volume_sensor_) this->volume_sensor_->publish_state(final_v);
-      this->last_published_vol_ = final_v;
+    int i = static_cast<int>(anchor) - 1;
+    while (i >= 0 && s[i] == ' ') i--;
+    if (i < 0) return false;
 
-      // Règle MUTE à -80 dB
-      if (vol_val <= -80.0) {
-        if (!this->last_published_mute_) {
-          if (this->mute_sensor_) this->mute_sensor_->publish_state(true);
-          this->last_published_mute_ = true;
-        }
-      } 
-      // Règle : Toute action volume (> -80) désactive le Mute
-      else if (this->last_published_mute_) {
-        ESP_LOGD(TAG, "Unmute auto par action volume (%s)", final_v.c_str());
-        if (this->mute_sensor_) this->mute_sensor_->publish_state(false);
-        this->last_published_mute_ = false;
+    auto is_digit_or_q = [](char c) { return (c >= '0' && c <= '9') || c == '?'; };
+
+    // Lire unités puis dizaines (tolère '?')
+    char d1 = 0;  // unités
+    char d2 = 0;  // dizaines
+    int slots = 0;
+
+    if (i >= 0 && is_digit_or_q(s[i])) { d1 = s[i--]; slots++; }
+    while (i >= 0 && s[i] == ' ') i--;
+    if (i >= 0 && is_digit_or_q(s[i])) { d2 = s[i--]; slots++; }
+
+    if (slots == 0) return false;
+
+    while (i >= 0 && s[i] == ' ') i--;
+    char sign = 0;
+    if (i >= 0 && (s[i] == '-' || s[i] == '+')) sign = s[i];
+
+    auto digit_val = [](char c) -> int { return (c >= '0' && c <= '9') ? (c - '0') : -1; };
+
+    const int u = digit_val(d1);
+    const int t = digit_val(d2);
+
+    struct Cand { int v; bool ps; bool pd; };
+    Cand best{0,false,false};
+    bool have_best = false;
+    int best_score = 1000000000;
+
+    auto consider = [&](int v, bool ps, bool pd, int score) {
+      if (!have_best || score < best_score) {
+        best = {v, ps, pd};
+        best_score = score;
+        have_best = true;
       }
+    };
+
+    auto eval_mag = [&](int mag, bool pd) {
+      // Signe connu
+      if (sign == '-' || sign == '+') {
+        int v = (sign == '-') ? -mag : mag;
+        if (!clamp_in_range(v)) return;
+
+        int score = 0;
+        if (this->has_last_good_vol_) {
+          const int last = round_to_int(this->last_good_vol_db_);
+          const uint32_t dt = millis() - this->last_good_vol_ms_;
+          const int md = max_delta_for_ms(dt);
+          const int d = std::abs(v - last);
+          if (d > md) return;  // uniquement pour patch; si valeur claire, elle passera via "dB" propre
+          score = d;
+        }
+        consider(v, false, pd, score);
+        return;
+      }
+
+      // Signe inconnu -> tester -mag et +mag
+      for (int si = 0; si < 2; si++) {
+        int v = (si == 0) ? -mag : mag;
+        if (!clamp_in_range(v)) continue;
+
+        int score = 0;
+        if (this->has_last_good_vol_) {
+          const int last = round_to_int(this->last_good_vol_db_);
+          const uint32_t dt = millis() - this->last_good_vol_ms_;
+          const int md = max_delta_for_ms(dt);
+          const int d = std::abs(v - last);
+          if (d > md) continue;
+          score = d + 1;  // pénalité légère: signe patché
+        } else {
+          // Sans historique, Yamaha est généralement négatif : petit bias
+          score = (v < 0) ? 0 : 2;
+        }
+        consider(v, true, pd, score);
+      }
+    };
+
+    // Construire la magnitude avec '?' possible
+    if (slots == 1) {
+      if (u >= 0) {
+        eval_mag(u, false);
+      } else {
+        // unité inconnue -> 0..9
+        for (int x = 0; x <= 9; x++) eval_mag(x, true);
+        patched_digit = true;
+      }
+    } else {  // slots == 2
+      if (t >= 0 && u >= 0) {
+        eval_mag(t * 10 + u, false);
+      } else if (t >= 0 && u < 0) {
+        for (int x = 0; x <= 9; x++) eval_mag(t * 10 + x, true);
+        patched_digit = true;
+      } else if (t < 0 && u >= 0) {
+        for (int x = 0; x <= 9; x++) eval_mag(x * 10 + u, true);
+        patched_digit = true;
+      } else {
+        // deux digits inconnues -> trop ambigu
+        return false;
+      }
+    }
+
+    if (!have_best) return false;
+
+    out_db = static_cast<float>(best.v);
+    patched_sign = best.ps;
+    patched_digit = best.pd;
+    return true;
+  };
+
+  // 2) Volume: parsing tolérant (ne dépend pas de "VOLUME" exact ni de "dB" complet)
+  // IMPORTANT: si la valeur est claire et dans la plage, on publie (pas de blocage "delta").
+  float vol_db = 0.0f;
+  bool patched_sign = false;
+  bool patched_digit = false;
+
+  if (parse_volume_tolerant(vol_db, patched_sign, patched_digit)) {
+    // Publication (inchangé dans l’esprit)
+    // Format: "<int> dB" (comme avant)
+    const int vol_i = static_cast<int>(vol_db);  // car Yamaha: pas de décimales, step 1 dB
+    const std::string final_v = std::to_string(vol_i) + " dB";
+
+    if (this->volume_sensor_) this->volume_sensor_->publish_state(final_v);
+    this->last_published_vol_ = final_v;
+
+    // Historique "fiable" mis à jour
+    this->has_last_good_vol_ = true;
+    this->last_good_vol_db_ = vol_db;
+    this->last_good_vol_ms_ = millis();
+
+    if (patched_sign || patched_digit) {
+      ESP_LOGD(TAG, "Volume patched%s%s -> %s",
+               patched_sign ? " sign" : "",
+               patched_digit ? " digit" : "",
+               final_v.c_str());
+    }
+
+    // Règles mute/unmute (inchangées)
+    if (vol_db <= -80.0f) {
+      if (!this->last_published_mute_) {
+        if (this->mute_sensor_) this->mute_sensor_->publish_state(true);
+        this->last_published_mute_ = true;
+      }
+    } else if (this->last_published_mute_) {
+      ESP_LOGD(TAG, "Unmute auto par action volume (%s)", final_v.c_str());
+      if (this->mute_sensor_) this->mute_sensor_->publish_state(false);
+      this->last_published_mute_ = false;
     }
   }
 
-  // 3. DÉCODAGE MUTE ON/OFF (Texte explicite)
+  // 3) MUTE ON/OFF (comme avant, basé sur content)
   if (content.find("MUTE ON") != std::string::npos) {
     if (!this->last_published_mute_) {
       if (this->mute_sensor_) this->mute_sensor_->publish_state(true);
@@ -132,8 +307,8 @@ void YamahaVFD::process_frame_() {
     }
   }
 
-  // 4. DÉCODAGE DES SOURCES
-  std::string s = "";
+  // 4) Sources (comme avant, basé sur content)
+  std::string s;
   if (content.find("DVD") != std::string::npos) s = "Lecteur DVD";
   else if (content.find("CD") != std::string::npos) s = "Chromecast Audio";
   else if (content.find("DTV") != std::string::npos || content.find("CBL") != std::string::npos) s = "Télévision";
@@ -146,8 +321,8 @@ void YamahaVFD::process_frame_() {
 }
 
 void YamahaVFD::dump_config() {
-  ESP_LOGCONFIG(TAG, "Yamaha VFD Sniffer - Full Frame Gap Mode");
+  ESP_LOGCONFIG(TAG, "Yamaha VFD Sniffer - Gap capture + tolerant volume parser");
 }
 
-} // namespace yamaha_vfd
-} // namespace esphome
+}  // namespace yamaha_vfd
+}  // namespace esphome

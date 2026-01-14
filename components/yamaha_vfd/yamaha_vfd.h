@@ -1,8 +1,12 @@
 #pragma once
+
+#include <cstdint>
+#include <string>
+
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
-#include "esphome/components/text_sensor/text_sensor.h"
-#include "esphome/components/binary_sensor/binary_sensor.h"
 
 namespace esphome {
 namespace yamaha_vfd {
@@ -25,11 +29,20 @@ class YamahaVFD : public Component {
   static void IRAM_ATTR handle_ce_interrupt(YamahaVFD *parent);
 
  protected:
+  // Inchangé (ménage + constantes)
+  static constexpr uint16_t BUFFER_SIZE = 1024;
+  static constexpr uint32_t GAP_MS = 50;
+  static constexpr uint32_t CK_TIMEOUT = 6000;
+
+  // Plage volume Yamaha (validée)
+  static constexpr int VOL_MIN_DB = -80;
+  static constexpr int VOL_MAX_DB = 16;
+
   void process_frame_();
 
-  InternalGPIOPin *ckfd_pin_;
-  InternalGPIOPin *dtfd_pin_;
-  InternalGPIOPin *cefd_pin_;
+  InternalGPIOPin *ckfd_pin_{nullptr};
+  InternalGPIOPin *dtfd_pin_{nullptr};
+  InternalGPIOPin *cefd_pin_{nullptr};
 
   text_sensor::TextSensor *source_sensor_{nullptr};
   text_sensor::TextSensor *volume_sensor_{nullptr};
@@ -39,17 +52,21 @@ class YamahaVFD : public Component {
   uint32_t ck_mask_{0};
   uint32_t dt_mask_{0};
 
-  // Capture basée sur le Gap (Silence)
-  uint8_t buffer_[1024];
+  uint8_t buffer_[BUFFER_SIZE]{};
   volatile uint16_t buffer_index_{0};
   volatile uint32_t last_byte_time_{0};
   volatile bool has_data_{false};
-  
-  // Variables d'état pour les règles capteurs
-  std::string last_published_vol_{""};
-  std::string last_published_source_{""};
+
+  // État capteurs
+  std::string last_published_vol_{};
+  std::string last_published_source_{};
   bool last_published_mute_{false};
   bool last_amp_state_{true};
+
+  // Historique volume fiable (pour patch signe / digit)
+  bool has_last_good_vol_{false};
+  float last_good_vol_db_{0.0f};
+  uint32_t last_good_vol_ms_{0};
 };
 
 }  // namespace yamaha_vfd
