@@ -372,6 +372,17 @@ void YamahaVFD::process_frame_() {
     const int vol_i = static_cast<int>(vol_db);  // car Yamaha: pas de décimales, step 1 dB
     const std::string final_v = std::to_string(vol_i) + " dB";
 
+    if (this->has_last_good_vol_) {
+      const int last_i = round_to_int(this->last_good_vol_db_);
+      const uint32_t dt = millis() - this->last_good_vol_ms_;
+      const int md = max_delta_for_ms(dt);
+      const int d = std::abs(vol_i - last_i);
+      if (!weak_anchor && d > (md + 2)) {
+        ESP_LOGD(TAG, "Skipping volume outlier (strong anchor): %s", final_v.c_str());
+        return;
+      }
+    }
+
     if (patched_sign && patched_digit) {
       if (!this->has_last_good_vol_) {
         ESP_LOGD(TAG, "Skipping volume with patched sign+digit (no history): %s", final_v.c_str());
@@ -409,7 +420,7 @@ void YamahaVFD::process_frame_() {
    // 4. DÉCODAGE DES SOURCES
   std::string s = "";
   if (content.find("DVD") != std::string::npos) s = "INPUT DVD";
-  else if (content.find("MD") != std::string::npos || content.find("CD-R") != std::string::npos || content.find("CDR") != std::string::npos) {
+  else if (content.find("CD-R") != std::string::npos || content.find("CDR") != std::string::npos) {
     s = "INPUT MD/CDR";
   } else if (content.find("DTV") != std::string::npos || content.find("CBL") != std::string::npos) {
     s = "INPUT DTV/CBL";
@@ -417,7 +428,10 @@ void YamahaVFD::process_frame_() {
     s = "INPUT V-AUX";
   } else if (content.find("DVR") != std::string::npos) {
     s = "INPUT DVR";
-  } else if (content.find("CD") != std::string::npos) {
+  } else if (content.find("CD") != std::string::npos &&
+             content.find("CD-R") == std::string::npos &&
+             content.find("CDR") == std::string::npos &&
+             content.find("MD") == std::string::npos) {
     s = "INPUT CD";
   }
   if (!s.empty() && s != this->last_published_source_) {
