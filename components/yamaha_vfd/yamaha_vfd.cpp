@@ -419,20 +419,32 @@ void YamahaVFD::process_frame_() {
 
    // 4. DÉCODAGE DES SOURCES
   std::string s = "";
-  if (content.find("DVD") != std::string::npos) s = "INPUT DVD";
-  else if (content.find("CD-R") != std::string::npos || content.find("CDR") != std::string::npos) {
+  size_t input_pos = content.find("INPUT");
+  std::string input_win = content;
+  if (input_pos != std::string::npos) {
+    size_t len = content.size() - input_pos;
+    if (len > 24) len = 24;
+    input_win = content.substr(input_pos, len);
+  }
+
+  if (input_win.find("DVD") != std::string::npos) s = "INPUT DVD";
+  else if (input_win.find("MD/CD") != std::string::npos ||
+           input_win.find("CD-R") != std::string::npos ||
+           input_win.find("CDR") != std::string::npos) {
     s = "INPUT MD/CDR";
-  } else if (content.find("DTV") != std::string::npos || content.find("CBL") != std::string::npos) {
+  } else if (input_win.find("DTV") != std::string::npos || input_win.find("CBL") != std::string::npos) {
     s = "INPUT DTV/CBL";
-  } else if (content.find("V-AUX") != std::string::npos) {
+  } else if (input_win.find("V-AUX") != std::string::npos) {
     s = "INPUT V-AUX";
-  } else if (content.find("DVR") != std::string::npos) {
+  } else if (input_win.find("DVR") != std::string::npos) {
     s = "INPUT DVR";
-  } else if (content.find("CD") != std::string::npos &&
-             content.find("CD-R") == std::string::npos &&
-             content.find("CDR") == std::string::npos &&
-             content.find("MD") == std::string::npos) {
-    s = "INPUT CD";
+  } else {
+    const bool has_cd = (input_win.find(" CD") != std::string::npos) || (input_win.find("CD ") != std::string::npos);
+    const bool has_cdr = (input_win.find("CD-R") != std::string::npos) || (input_win.find("CDR") != std::string::npos);
+    const bool has_md = (input_win.find("MD") != std::string::npos);
+    if (has_cd && !has_cdr && !has_md) {
+      s = "INPUT CD";
+    }
   }
   if (!s.empty() && s != this->last_published_source_) {
     if (this->source_sensor_) this->source_sensor_->publish_state(s);
